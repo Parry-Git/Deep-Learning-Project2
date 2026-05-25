@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+.conda/
+
+# PyTorch / Deep Learning
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.onnx
+
+# Datasets (stored on ModelScope, download via codes/download.py)
+data/
+!data/.gitkeep
+
+# Model checkpoints (stored on ModelScope)
+checkpoints/
+!checkpoints/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & outputs
+*.log
+runs/
+wandb/
+outputs/
+
+# Report build artifacts
+report/*.aux
+report/*.log
+report/*.out
+report/*.synctex.gz
+report/*.fdb_latexmk
+report/*.fls
+
+# Large files
+*.zip
+*.tar.gz
