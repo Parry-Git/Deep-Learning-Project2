@@ -78,8 +78,10 @@ def make_scaler(device):
     return None
 
 
-def try_compile(model, device):
+def try_compile(model, device, enabled=True):
     """Apply torch.compile if available and supported."""
+    if not enabled:
+        return model
     if not hasattr(torch, "compile"):
         return model
     if device.type == "mps":
@@ -120,7 +122,16 @@ class Cutout:
         return img
 
 
-def get_dataloaders(batch_size=128, num_workers=0, data_dir=None):
+def get_dataloaders(
+    batch_size=128,
+    num_workers=0,
+    data_dir=None,
+    pin_memory=None,
+    persistent_workers=False,
+    prefetch_factor=2,
+    worker_timeout=0,
+    mp_context=None,
+):
     if data_dir is None:
         data_dir = str(PROJECT_ROOT / "data")
 
@@ -147,14 +158,25 @@ def get_dataloaders(batch_size=128, num_workers=0, data_dir=None):
         root=data_dir, train=False, download=False, transform=test_transform
     )
 
-    use_pin = torch.cuda.is_available()
+    use_pin = torch.cuda.is_available() if pin_memory is None else pin_memory
+    loader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": use_pin,
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = persistent_workers
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+        loader_kwargs["timeout"] = worker_timeout
+        if mp_context:
+            loader_kwargs["multiprocessing_context"] = mp_context
+
     trainloader = torch.utils.data.DataLoader(
         trainset, batch_size=batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=use_pin, persistent_workers=(num_workers > 0),
+        **loader_kwargs,
     )
     testloader = torch.utils.data.DataLoader(
         testset, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=use_pin, persistent_workers=(num_workers > 0),
+        **loader_kwargs,
     )
     return trainloader, testloader
 
@@ -222,6 +244,22 @@ def train(args):
     device = get_device()
     print(f"Device: {device}")
 
+    mp_context = args.mp_context
+    if mp_context is None and args.workers > 0 and device.type == "cuda":
+        mp_context = "forkserver"
+
+    # On Linux/WSL, the default worker start method is fork; forking after CUDA
+    # init can hang, so CUDA + multi-worker defaults to forkserver above.
+    trainloader, testloader = get_dataloaders(
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        pin_memory=not args.no_pin_memory,
+        persistent_workers=args.persistent_workers,
+        prefetch_factor=args.prefetch_factor,
+        worker_timeout=args.worker_timeout,
+        mp_context=mp_context,
+    )
+
     model_config = {
         "blocks_per_stage": tuple(args.blocks),
         "channels": tuple(args.channels),
@@ -234,7 +272,7 @@ def train(args):
     if supports_channels_last(device):
         model = model.to(memory_format=torch.channels_last)
 
-    model = try_compile(model, device)
+    model = try_compile(model, device, enabled=not args.no_compile)
     print(f"Model: {desc}")
 
     # AMP setup
@@ -242,8 +280,6 @@ def train(args):
     scaler = make_scaler(device) if use_amp else None
     if use_amp:
         print(f"AMP: enabled (dtype=float16, scaler={'yes' if scaler else 'no'})")
-
-    trainloader, testloader = get_dataloaders(args.batch_size, args.workers)
 
     criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     optimizer = get_optimizer(args.optimizer, model.parameters(), args.lr, args.weight_decay)
@@ -322,6 +358,18 @@ def main():
     parser.add_argument("--blocks", type=int, nargs=3, default=[3, 3, 3])
     parser.add_argument("--channels", type=int, nargs=3, default=[64, 128, 256])
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--persistent-workers", action="store_true",
+                        help="Keep DataLoader workers alive between epochs")
+    parser.add_argument("--prefetch-factor", type=int, default=2,
+                        help="Number of batches prefetched by each worker")
+    parser.add_argument("--worker-timeout", type=int, default=0,
+                        help="DataLoader worker timeout in seconds; 0 disables timeout")
+    parser.add_argument("--mp-context", choices=["fork", "spawn", "forkserver"], default=None,
+                        help="DataLoader multiprocessing start method")
+    parser.add_argument("--no-pin-memory", action="store_true",
+                        help="Disable DataLoader pin_memory")
+    parser.add_argument("--no-compile", action="store_true",
+                        help="Disable torch.compile")
     parser.add_argument("--amp", action="store_true", help="Enable mixed precision (CUDA/MPS)")
     parser.add_argument("--run-name", type=str, default="default")
     parser.add_argument("--experiment", type=str, default=None,

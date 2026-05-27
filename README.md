@@ -29,8 +29,11 @@ PJ2/
 # 1. 安装依赖
 pip install torch torchvision modelscope matplotlib
 
-# 2. 下载数据集和预训练权重
-python codes/download.py --all
+# 2. 下载数据集
+python codes/download.py --data --source torchvision
+
+# 如果已上传预训练权重到 ModelScope，再下载数据集和权重
+MODELSCOPE_REPO_ID=your_name/NNDL-PJ2 python codes/download.py --all
 
 # 3. Part 1 - 测试最佳模型
 python codes/part1_cifar10/test.py
@@ -72,7 +75,8 @@ python codes/VGG_BatchNorm/VGG_Loss_Landscape.py
 
 数据集和模型权重存储在 ModelScope：
 - 仓库地址：`TODO`（提交前填写）
-- 使用 `python codes/download.py --all` 一键获取
+- 提交前上传后，可使用 `MODELSCOPE_REPO_ID=your_name/NNDL-PJ2 python codes/download.py --all` 一键获取
+- 未配置 ModelScope 仓库时，可先用 `python codes/download.py --data --source torchvision` 获取 CIFAR-10 数据集
 
 ## 环境
 

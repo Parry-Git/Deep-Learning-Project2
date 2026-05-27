@@ -16,11 +16,14 @@
 import argparse
 import os
 import ssl
+import sys
 import tarfile
+import urllib.request
 from pathlib import Path
 
 # ============ 配置区（提交前确认） ============
-MODELSCOPE_REPO_ID = "YOUR_ID/NNDL-PJ2"  # TODO: 替换为你的 ModelScope 仓库 ID
+DEFAULT_MODELSCOPE_REPO_ID = "YOUR_ID/NNDL-PJ2"  # TODO: 替换为你的 ModelScope 仓库 ID
+MODELSCOPE_REPO_ID = os.getenv("MODELSCOPE_REPO_ID", DEFAULT_MODELSCOPE_REPO_ID)
 
 FILES = {
     "data": {
@@ -35,6 +38,18 @@ FILES = {
 # =============================================
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CIFAR10_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+
+
+def is_placeholder_repo(repo_id: str) -> bool:
+    return not repo_id or repo_id == DEFAULT_MODELSCOPE_REPO_ID or "YOUR_ID" in repo_id
+
+
+def print_modelscope_hint(repo_id: str):
+    print("  ModelScope repo is not configured.")
+    print(f"  Current repo id: {repo_id!r}")
+    print("  Set MODELSCOPE_REPO_ID or pass --repo-id after uploading the files.")
+    print("  Example: MODELSCOPE_REPO_ID=your_name/NNDL-PJ2 python codes/download.py --all")
 
 
 def download_from_modelscope(repo_id: str, filename: str, local_path: Path):
@@ -52,9 +67,24 @@ def download_from_modelscope(repo_id: str, filename: str, local_path: Path):
         actual.rename(local_path)
 
 
+def download_cifar10_direct(tar_path: Path):
+    """Download CIFAR-10 tarball directly from the official source."""
+    tar_path.parent.mkdir(parents=True, exist_ok=True)
+    ssl._create_default_https_context = ssl._create_unverified_context
+    print(f"  Downloading CIFAR-10 tarball from {CIFAR10_URL}...")
+    urllib.request.urlretrieve(CIFAR10_URL, tar_path)
+    print("  Done.")
+
+
 def download_via_torchvision():
     """Fallback: download CIFAR-10 directly from official source via torchvision."""
-    import torchvision
+    try:
+        import torchvision
+    except ModuleNotFoundError:
+        print("  torchvision is not installed; downloading CIFAR-10 tarball directly.")
+        download_cifar10_direct(PROJECT_ROOT / "data" / "cifar-10-python.tar.gz")
+        extract_cifar10()
+        return
 
     ssl._create_default_https_context = ssl._create_unverified_context
     data_dir = str(PROJECT_ROOT / "data")
@@ -88,7 +118,14 @@ def main():
         default="modelscope",
         help="Data source: modelscope (default, includes checkpoints) or torchvision (data only)",
     )
+    parser.add_argument(
+        "--repo-id",
+        default=MODELSCOPE_REPO_ID,
+        help="ModelScope repo id, e.g. your_name/NNDL-PJ2. Can also use MODELSCOPE_REPO_ID.",
+    )
     args = parser.parse_args()
+    repo_id = args.repo_id
+    repo_is_placeholder = is_placeholder_repo(repo_id)
 
     if not (args.data or args.checkpoints or args.all):
         args.all = True
@@ -103,13 +140,16 @@ def main():
         data_ready = (PROJECT_ROOT / "data" / "cifar-10-batches-py").exists()
         if data_ready:
             print("  CIFAR-10 already exists, skipping.")
-        elif args.source == "torchvision":
+        elif args.source == "torchvision" or repo_is_placeholder:
+            if args.source == "modelscope" and repo_is_placeholder:
+                print_modelscope_hint(repo_id)
+                print("  Falling back to torchvision for CIFAR-10 data.")
             download_via_torchvision()
         else:
             tar_path = PROJECT_ROOT / "data" / "cifar-10-python.tar.gz"
             if not tar_path.exists():
                 download_from_modelscope(
-                    MODELSCOPE_REPO_ID,
+                    repo_id,
                     "data/cifar-10-python.tar.gz",
                     tar_path,
                 )
@@ -121,13 +161,18 @@ def main():
         print("[checkpoints]")
         if args.source == "torchvision":
             print("  Skipping checkpoints (not available from torchvision source).")
+        elif repo_is_placeholder:
+            print_modelscope_hint(repo_id)
+            print("  Skipping checkpoints. Train locally to create them, or configure a real ModelScope repo.")
+            if args.checkpoints and not args.all:
+                sys.exit(2)
         else:
             for remote_path, local_rel in FILES["checkpoints"].items():
                 local_path = PROJECT_ROOT / local_rel
                 if local_path.exists():
                     print(f"  {local_rel} already exists, skipping.")
                     continue
-                download_from_modelscope(MODELSCOPE_REPO_ID, remote_path, local_path)
+                download_from_modelscope(repo_id, remote_path, local_path)
         print()
 
     print("All done!")
