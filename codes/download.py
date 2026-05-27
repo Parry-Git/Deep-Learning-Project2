@@ -1,22 +1,27 @@
 """
-一键下载数据集和模型权重（从 ModelScope）
-用法: python download.py [--data] [--checkpoints] [--all]
+一键下载数据集和模型权重
+
+方式一（推荐）: 从 ModelScope 下载（包含预训练权重）
+    python download.py --all
+
+方式二: 仅下载数据集（从官方源，不需要 modelscope 库）
+    python download.py --data --source torchvision
 
 助教复现步骤:
-    1. pip install modelscope
-    2. python download.py --all
+    1. pip install torch torchvision modelscope matplotlib
+    2. python codes/download.py --all
     3. 按 README 运行训练/测试脚本
 """
 
 import argparse
 import os
+import ssl
 import tarfile
 from pathlib import Path
 
 # ============ 配置区（提交前确认） ============
 MODELSCOPE_REPO_ID = "YOUR_ID/NNDL-PJ2"  # TODO: 替换为你的 ModelScope 仓库 ID
 
-# 文件映射: ModelScope仓库中的路径 -> 本地存放路径（相对于项目根目录）
 FILES = {
     "data": {
         "data/cifar-10-python.tar.gz": "data/cifar-10-python.tar.gz",
@@ -33,7 +38,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def download_from_modelscope(repo_id: str, filename: str, local_path: Path):
-    from modelscope.hub.api import HubApi
     from modelscope.hub.file_download import model_file_download
 
     local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,10 +47,21 @@ def download_from_modelscope(repo_id: str, filename: str, local_path: Path):
         file_path=filename,
         local_dir=str(local_path.parent),
     )
-    # model_file_download 可能把文件放在子目录中，做个兜底move
     actual = Path(downloaded) if downloaded else local_path
     if actual != local_path and actual.exists():
         actual.rename(local_path)
+
+
+def download_via_torchvision():
+    """Fallback: download CIFAR-10 directly from official source via torchvision."""
+    import torchvision
+
+    ssl._create_default_https_context = ssl._create_unverified_context
+    data_dir = str(PROJECT_ROOT / "data")
+    print("  Downloading CIFAR-10 via torchvision...")
+    torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True)
+    torchvision.datasets.CIFAR10(root=data_dir, train=False, download=True)
+    print("  Done.")
 
 
 def extract_cifar10():
@@ -63,39 +78,59 @@ def extract_cifar10():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download data and checkpoints from ModelScope")
+    parser = argparse.ArgumentParser(description="Download data and checkpoints")
     parser.add_argument("--data", action="store_true", help="Download dataset only")
     parser.add_argument("--checkpoints", action="store_true", help="Download model weights only")
     parser.add_argument("--all", action="store_true", help="Download everything")
+    parser.add_argument(
+        "--source",
+        choices=["modelscope", "torchvision"],
+        default="modelscope",
+        help="Data source: modelscope (default, includes checkpoints) or torchvision (data only)",
+    )
     args = parser.parse_args()
 
     if not (args.data or args.checkpoints or args.all):
         args.all = True
 
-    targets = []
-    if args.all or args.data:
-        targets.append("data")
-    if args.all or args.checkpoints:
-        targets.append("checkpoints")
-
-    print(f"ModelScope Repo: {MODELSCOPE_REPO_ID}")
     print(f"Project Root: {PROJECT_ROOT}")
+    print(f"Source: {args.source}")
     print()
 
-    for category in targets:
-        print(f"[{category}]")
-        for remote_path, local_rel in FILES[category].items():
-            local_path = PROJECT_ROOT / local_rel
-            if local_path.exists():
-                print(f"  {local_rel} already exists, skipping.")
-                continue
-            download_from_modelscope(MODELSCOPE_REPO_ID, remote_path, local_path)
+    # Download data
+    if args.all or args.data:
+        print("[data]")
+        data_ready = (PROJECT_ROOT / "data" / "cifar-10-batches-py").exists()
+        if data_ready:
+            print("  CIFAR-10 already exists, skipping.")
+        elif args.source == "torchvision":
+            download_via_torchvision()
+        else:
+            tar_path = PROJECT_ROOT / "data" / "cifar-10-python.tar.gz"
+            if not tar_path.exists():
+                download_from_modelscope(
+                    MODELSCOPE_REPO_ID,
+                    "data/cifar-10-python.tar.gz",
+                    tar_path,
+                )
+            extract_cifar10()
         print()
 
-    if args.all or args.data:
-        extract_cifar10()
+    # Download checkpoints
+    if args.all or args.checkpoints:
+        print("[checkpoints]")
+        if args.source == "torchvision":
+            print("  Skipping checkpoints (not available from torchvision source).")
+        else:
+            for remote_path, local_rel in FILES["checkpoints"].items():
+                local_path = PROJECT_ROOT / local_rel
+                if local_path.exists():
+                    print(f"  {local_rel} already exists, skipping.")
+                    continue
+                download_from_modelscope(MODELSCOPE_REPO_ID, remote_path, local_path)
+        print()
 
-    print("All done! You can now run the training/testing scripts.")
+    print("All done!")
 
 
 if __name__ == "__main__":
