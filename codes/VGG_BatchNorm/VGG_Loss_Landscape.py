@@ -7,6 +7,7 @@ learning rates with matplotlib.fill_between.
 """
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -116,28 +117,42 @@ def make_band(curves):
 
 def plot_landscape(results, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(9.5, 5.2))
+    fig, axes = plt.subplots(1, 2, figsize=(12.0, 4.8), sharey=False)
     colors = {
         "vgg_a": "#4C78A8",
         "vgg_bn": "#F58518",
     }
 
-    for model_name, payload in results["models"].items():
-        band = payload["band"]
-        steps = np.array(band["steps"])
-        min_curve = np.array(band["min"])
-        max_curve = np.array(band["max"])
-        mean_curve = np.array(band["mean"])
-        label = payload["display_name"]
-        color = colors.get(model_name, None)
-        ax.fill_between(steps, min_curve, max_curve, alpha=0.18, color=color, label=f"{label} lr range")
-        ax.plot(steps, mean_curve, linewidth=2.0, color=color, label=f"{label} mean")
+    def draw_panel(ax, start_step, title):
+        for model_name, payload in results["models"].items():
+            band = payload["band"]
+            steps = np.array(band["steps"])
+            mask = steps >= start_step
+            min_curve = np.array(band["min"])[mask]
+            max_curve = np.array(band["max"])[mask]
+            mean_curve = np.array(band["mean"])[mask]
+            panel_steps = steps[mask]
+            label = payload["display_name"]
+            color = colors.get(model_name, None)
+            ax.fill_between(
+                panel_steps,
+                min_curve,
+                max_curve,
+                alpha=0.18,
+                color=color,
+                label=f"{label} lr range",
+            )
+            ax.plot(panel_steps, mean_curve, linewidth=2.0, color=color, label=f"{label} mean")
 
-    ax.set_title("VGG Loss Landscape over Learning Rates")
-    ax.set_xlabel("Optimization Step")
-    ax.set_ylabel("Training Loss")
-    ax.grid(alpha=0.25)
-    ax.legend(fontsize=9)
+        ax.set_title(title)
+        ax.set_xlabel("Optimization Step")
+        ax.grid(alpha=0.25)
+
+    draw_panel(axes[0], start_step=1, title="Full per-step loss band")
+    draw_panel(axes[1], start_step=10, title="Zoom after early transient")
+    axes[0].set_ylabel("Training Loss")
+    axes[1].legend(fontsize=8, loc="upper right")
+    fig.suptitle("VGG Loss Bands over Learning Rates", y=1.02)
     fig.tight_layout()
     fig.savefig(output_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
@@ -162,6 +177,8 @@ def parse_args():
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True,
                         help="Enable AMP on CUDA; use --no-amp to disable")
     parser.add_argument("--save-checkpoints", action="store_true")
+    parser.add_argument("--from-log", type=Path, default=None,
+                        help="Only redraw the figure from an existing landscape JSON log")
     parser.add_argument("--seed", type=int, default=2020)
     parser.add_argument("--run-name", type=str, default="vgg_loss_landscape")
     return parser.parse_args()
@@ -169,6 +186,15 @@ def parse_args():
 
 def main():
     args = parse_args()
+    plot_path = PROJECT_ROOT / "pic" / f"loss_landscape_{args.run_name}.png"
+    if args.from_log is not None:
+        with args.from_log.open("r", encoding="utf-8") as f:
+            results = json.load(f)
+        plot_landscape(results, plot_path)
+        print(f"Loaded log: {args.from_log}")
+        print(f"Saved plot: {plot_path}")
+        return
+
     device = get_device()
     if args.workers > 0 and device.type == "cuda" and args.mp_context is None:
         args.mp_context = "forkserver"
@@ -196,7 +222,6 @@ def main():
         }
 
     log_path = PROJECT_ROOT / "checkpoints" / "vgg_bn" / f"loss_landscape_{args.run_name}.json"
-    plot_path = PROJECT_ROOT / "pic" / f"loss_landscape_{args.run_name}.png"
     save_json(results, log_path)
     plot_landscape(results, plot_path)
     print(f"Saved log: {log_path}")

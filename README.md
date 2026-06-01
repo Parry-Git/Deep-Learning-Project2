@@ -1,7 +1,5 @@
 # NNDL Project 2: CIFAR-10 Classification and Batch Normalization
 
-Student: 于翔, 23307130202
-
 - GitHub: https://github.com/Parry-Git/Deep-Learning-Project2
 - ModelScope data and weights: https://www.modelscope.cn/models/ParryY/Deep-Learning-Project2
 
@@ -25,7 +23,7 @@ Deep-Learning-Project2/
 │   │   ├── run_part2_experiments.py    # Part 2 batched runner
 │   │   ├── VGG_Loss_Landscape.py       # Loss landscape experiment
 │   │   └── cifar_loaders.py            # CIFAR-10 loaders
-│   └── download.py                     # Download data and released checkpoints
+│   └── download.py                     # Download data and best checkpoints
 ├── data/                               # Ignored by git; downloaded from ModelScope/torchvision
 ├── checkpoints/                        # Ignored by git; downloaded or produced locally
 ├── outputs/                            # Ignored by git; experiment summaries and console logs
@@ -38,7 +36,7 @@ Deep-Learning-Project2/
 The project intentionally uses a small dependency set:
 
 ```bash
-conda activate sii
+conda activate project2
 pip install -r requirements.txt
 ```
 
@@ -46,19 +44,19 @@ Core dependencies are PyTorch, torchvision, matplotlib, numpy, and modelscope. T
 
 ## Fast Reproduction for Review
 
-The fastest path downloads the CIFAR-10 archive and released checkpoints from ModelScope, then evaluates the Part 1 model:
+The fastest path downloads the CIFAR-10 archive and best checkpoints from ModelScope, then evaluates the Part 1 model:
 
 ```bash
 git clone https://github.com/Parry-Git/Deep-Learning-Project2.git
 cd Deep-Learning-Project2
 
-conda activate sii
+conda activate project2
 pip install -r requirements.txt
 python codes/download.py --all
 python codes/part1_cifar10/test.py
 ```
 
-Expected released Part 1 checkpoint:
+Expected Part 1 best checkpoint:
 
 - `checkpoints/part1_best.pth`
 - Best test accuracy recorded during training: 96.59%
@@ -180,8 +178,8 @@ Part 1 CifarResNet:
 
 | Experiment | Best Accuracy | Notes |
 |---|---:|---|
-| Released medium-width checkpoint, 200 epochs | 96.59% | `checkpoints/part1_best.pth` |
-| Large-width ablation, 100 epochs | 96.85% | Higher capacity, not the released checkpoint |
+| Selected medium-width checkpoint, 200 epochs | 96.59% | `checkpoints/part1_best.pth` |
+| Large-width ablation, 100 epochs | 96.85% | Higher capacity, not the selected checkpoint |
 
 Part 2 VGG-A / BatchNorm:
 
@@ -194,7 +192,7 @@ VGG-A is expected to be less accurate than the Part 1 CifarResNet: Part 2 is a c
 
 ## ModelScope Artifacts
 
-The ModelScope repository stores the dataset, released checkpoints, learning-rate sweep checkpoints, logs, summaries, and report draft:
+The ModelScope repository stores the dataset, best checkpoints, learning-rate sweep checkpoints, logs, and summaries:
 
 - `data/cifar-10-python.tar.gz`
 - `checkpoints/part1_best.pth`
@@ -203,13 +201,12 @@ The ModelScope repository stores the dataset, released checkpoints, learning-rat
 - `checkpoints/vgg_bn/best_vgg_lr_*_e40_*.pth`
 - `logs/checkpoints/`
 - `logs/outputs/`
-- `report/main.pdf`
 
 The default repository ID in `codes/download.py` is already set to `ParryY/Deep-Learning-Project2`.
 
 ## Report
 
-The final report source is in `report/main.tex`. A compiled PDF is available at:
+The final report source is in `report/main.tex`. The compiled PDF is submitted separately via elearning:
 
 ```text
 report/main.pdf
