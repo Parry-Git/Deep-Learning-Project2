@@ -1,185 +1,207 @@
+"""
+Loss landscape experiment for VGG-A with and without BatchNorm.
+
+The script trains each architecture with several learning rates, records the
+training loss at every optimization step, then plots the min/max loss band over
+learning rates with matplotlib.fill_between.
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+
 import matplotlib as mpl
-mpl.use('Agg')
+
+mpl.use("Agg")
 import matplotlib.pyplot as plt
-from torch import nn
 import numpy as np
 import torch
-import os
-import random
-from tqdm import tqdm as tqdm
-from IPython import display
+import torch.nn as nn
+import torch.optim as optim
 
-from models.vgg import VGG_A
-from models.vgg import VGG_A_BatchNorm # you need to implement this network
-from data.loaders import get_cifar_loader
+VGG_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = VGG_DIR.parents[1]
+sys.path.insert(0, str(VGG_DIR))
 
-# ## Constants (parameters) initialization
-device_id = [0,1,2,3]
-num_workers = 4
-batch_size = 128
-
-# add our package dir to path 
-module_path = os.path.dirname(os.getcwd())
-home_path = module_path
-figures_path = os.path.join(home_path, 'reports', 'figures')
-models_path = os.path.join(home_path, 'reports', 'models')
-
-# Make sure you are using the right device.
-device_id = device_id
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-device = torch.device("cuda:{}".format(3) if torch.cuda.is_available() else "cpu")
-print(device)
-print(torch.cuda.get_device_name(3))
+from cifar_loaders import get_cifar_loader
+from models.vgg import get_number_of_parameters
+from train_vgg import build_model, get_device, make_scaler, save_json, set_random_seeds
 
 
-
-# Initialize your data loader and
-# make sure that dataloader works
-# as expected by observing one
-# sample from it.
-train_loader = get_cifar_loader(train=True)
-val_loader = get_cifar_loader(train=False)
-for X,y in train_loader:
-    ## --------------------
-    # Add code as needed
-    #
-    #
-    #
-    #
-    ## --------------------
-    break
+def build_optimizer(args, model, lr):
+    if args.optimizer == "sgd":
+        return optim.SGD(
+            model.parameters(),
+            lr=lr,
+            momentum=args.momentum,
+            weight_decay=args.weight_decay,
+        )
+    if args.optimizer == "adamw":
+        return optim.AdamW(model.parameters(), lr=lr, weight_decay=args.weight_decay)
+    return optim.Adam(model.parameters(), lr=lr, weight_decay=args.weight_decay)
 
 
+def train_loss_curve(args, model_name, lr, device):
+    set_random_seeds(args.seed, device)
+    train_loader = get_cifar_loader(
+        train=True,
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        n_items=args.n_items,
+        augment=False,
+        shuffle=True,
+        pin_memory=False if args.no_pin_memory else None,
+        persistent_workers=args.persistent_workers,
+        prefetch_factor=args.prefetch_factor,
+        worker_timeout=args.worker_timeout,
+        mp_context=args.mp_context,
+        seed=args.seed,
+    )
 
-# This function is used to calculate the accuracy of model classification
-def get_accuracy():
-    ## --------------------
-    # Add code as needed
-    #
-    #
-    #
-    #
-    ## --------------------
-    pass
+    model, display_name = build_model(model_name)
+    model = model.to(device)
+    optimizer = build_optimizer(args, model, lr)
+    criterion = nn.CrossEntropyLoss()
+    use_amp = args.amp and device.type == "cuda"
+    scaler = make_scaler(device, enabled=use_amp)
+    losses = []
 
-# Set a random seed to ensure reproducible results
-def set_random_seeds(seed_value=0, device='cpu'):
-    np.random.seed(seed_value)
-    torch.manual_seed(seed_value)
-    random.seed(seed_value)
-    if device != 'cpu': 
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    model.train()
+    for _ in range(args.epochs):
+        for inputs, targets in train_loader:
+            inputs = inputs.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
+            optimizer.zero_grad(set_to_none=True)
 
+            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
 
-# We use this function to complete the entire
-# training process. In order to plot the loss landscape,
-# you need to record the loss value of each step.
-# Of course, as before, you can test your model
-# after drawing a training round and save the curve
-# to observe the training
-def train(model, optimizer, criterion, train_loader, val_loader, scheduler=None, epochs_n=100, best_model_path=None):
-    model.to(device)
-    learning_curve = [np.nan] * epochs_n
-    train_accuracy_curve = [np.nan] * epochs_n
-    val_accuracy_curve = [np.nan] * epochs_n
-    max_val_accuracy = 0
-    max_val_accuracy_epoch = 0
+            losses.append(float(loss.detach().cpu()))
+            if scaler is not None:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
-    batches_n = len(train_loader)
-    losses_list = []
-    grads = []
-    for epoch in tqdm(range(epochs_n), unit='epoch'):
-        if scheduler is not None:
-            scheduler.step()
-        model.train()
+    if args.save_checkpoints:
+        ckpt_dir = PROJECT_ROOT / "checkpoints" / "vgg_bn" / "landscape_models"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(model.state_dict(), ckpt_dir / f"{args.run_name}_{model_name}_lr{lr:g}.pth")
 
-        loss_list = []  # use this to record the loss value of each step
-        grad = []  # use this to record the loss gradient of each step
-        learning_curve[epoch] = 0  # maintain this to plot the training curve
-
-        for data in train_loader:
-            x, y = data
-            x = x.to(device)
-            y = y.to(device)
-            optimizer.zero_grad()
-            prediction = model(x)
-            loss = criterion(prediction, y)
-            # You may need to record some variable values here
-            # if you want to get loss gradient, use
-            # grad = model.classifier[4].weight.grad.clone()
-            ## --------------------
-            # Add your code
-            #
-            #
-            #
-            #
-            ## --------------------
+    return {
+        "model": model_name,
+        "display_name": display_name,
+        "lr": lr,
+        "params": get_number_of_parameters(model),
+        "losses": losses,
+    }
 
 
-            loss.backward()
-            optimizer.step()
-
-        losses_list.append(loss_list)
-        grads.append(grad)
-        display.clear_output(wait=True)
-        f, axes = plt.subplots(1, 2, figsize=(15, 3))
-
-        learning_curve[epoch] /= batches_n
-        axes[0].plot(learning_curve)
-
-        # Test your model and save figure here (not required)
-        # remember to use model.eval()
-        ## --------------------
-        # Add code as needed
-        #
-        #
-        #
-        #
-        ## --------------------
-
-    return
+def make_band(curves):
+    min_len = min(len(curve["losses"]) for curve in curves)
+    values = np.array([curve["losses"][:min_len] for curve in curves], dtype=np.float64)
+    return {
+        "steps": list(range(1, min_len + 1)),
+        "min": values.min(axis=0).tolist(),
+        "max": values.max(axis=0).tolist(),
+        "mean": values.mean(axis=0).tolist(),
+    }
 
 
-# Train your model
-# feel free to modify
-epo = 20
-loss_save_path = ''
-grad_save_path = ''
+def plot_landscape(results, output_path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(9.5, 5.2))
+    colors = {
+        "vgg_a": "#4C78A8",
+        "vgg_bn": "#F58518",
+    }
 
-set_random_seeds(seed_value=2020, device=device)
-model = VGG_A()
-lr = 0.001
-optimizer = torch.optim.Adam(model.parameters(), lr = lr)
-criterion = nn.CrossEntropyLoss()
-loss, grads = train(model, optimizer, criterion, train_loader, val_loader, epochs_n=epo)
-np.savetxt(os.path.join(loss_save_path, 'loss.txt'), loss, fmt='%s', delimiter=' ')
-np.savetxt(os.path.join(grad_save_path, 'grads.txt'), grads, fmt='%s', delimiter=' ')
+    for model_name, payload in results["models"].items():
+        band = payload["band"]
+        steps = np.array(band["steps"])
+        min_curve = np.array(band["min"])
+        max_curve = np.array(band["max"])
+        mean_curve = np.array(band["mean"])
+        label = payload["display_name"]
+        color = colors.get(model_name, None)
+        ax.fill_between(steps, min_curve, max_curve, alpha=0.18, color=color, label=f"{label} lr range")
+        ax.plot(steps, mean_curve, linewidth=2.0, color=color, label=f"{label} mean")
 
-# Maintain two lists: max_curve and min_curve,
-# select the maximum value of loss in all models
-# on the same step, add it to max_curve, and
-# the minimum value to min_curve
-min_curve = []
-max_curve = []
-## --------------------
-# Add your code
-#
-#
-#
-#
-## --------------------
+    ax.set_title("VGG Loss Landscape over Learning Rates")
+    ax.set_xlabel("Optimization Step")
+    ax.set_ylabel("Training Loss")
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
 
-# Use this function to plot the final loss landscape,
-# fill the area between the two curves can use plt.fill_between()
-def plot_loss_landscape():
-    ## --------------------
-    # Add your code
-    #
-    #
-    #
-    #
-    ## --------------------
-    pass
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Plot VGG-A loss landscape with and without BN")
+    parser.add_argument("--models", nargs="+", choices=["vgg_a", "vgg_bn"], default=["vgg_a", "vgg_bn"])
+    parser.add_argument("--lrs", type=float, nargs="+", default=[1e-3, 2e-3, 1e-4, 5e-4])
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--n-items", type=int, default=5000)
+    parser.add_argument("--optimizer", choices=["adam", "adamw", "sgd"], default="adam")
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--persistent-workers", action="store_true")
+    parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument("--worker-timeout", type=int, default=0)
+    parser.add_argument("--mp-context", choices=["fork", "spawn", "forkserver"], default=None)
+    parser.add_argument("--no-pin-memory", action="store_true")
+    parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True,
+                        help="Enable AMP on CUDA; use --no-amp to disable")
+    parser.add_argument("--save-checkpoints", action="store_true")
+    parser.add_argument("--seed", type=int, default=2020)
+    parser.add_argument("--run-name", type=str, default="vgg_loss_landscape")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    device = get_device()
+    if args.workers > 0 and device.type == "cuda" and args.mp_context is None:
+        args.mp_context = "forkserver"
+    print(f"Device: {device}")
+    print(f"Learning rates: {args.lrs}")
+    print(f"Train subset for landscape: {args.n_items}")
+
+    results = {
+        "config": vars(args),
+        "models": {},
+    }
+
+    for model_name in args.models:
+        curves = []
+        display_name = None
+        for lr in args.lrs:
+            print(f"Running {model_name} lr={lr:g} ...")
+            curve = train_loss_curve(args, model_name, lr, device)
+            display_name = curve["display_name"]
+            curves.append(curve)
+        results["models"][model_name] = {
+            "display_name": display_name,
+            "curves": curves,
+            "band": make_band(curves),
+        }
+
+    log_path = PROJECT_ROOT / "checkpoints" / "vgg_bn" / f"loss_landscape_{args.run_name}.json"
+    plot_path = PROJECT_ROOT / "pic" / f"loss_landscape_{args.run_name}.png"
+    save_json(results, log_path)
+    plot_landscape(results, plot_path)
+    print(f"Saved log: {log_path}")
+    print(f"Saved plot: {plot_path}")
+
+
+if __name__ == "__main__":
+    main()

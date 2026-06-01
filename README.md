@@ -1,87 +1,218 @@
-# NNDL Project 2: CIFAR-10 Classification & Batch Normalization
+# NNDL Project 2: CIFAR-10 Classification and Batch Normalization
 
-神经网络与深度学习 - 课程项目2
+Student: 于翔, 23307130202
 
-## 项目结构
+- GitHub: https://github.com/Parry-Git/Deep-Learning-Project2
+- ModelScope data and weights: https://www.modelscope.cn/models/ParryY/Deep-Learning-Project2
 
-```
-PJ2/
+This repository contains the code and report for Project 2 of Neural Network and Deep Learning. Part 1 trains a custom CNN on CIFAR-10. Part 2 studies Batch Normalization with VGG-A, learning-rate sweeps, and loss landscape visualization.
+
+## Project Structure
+
+```text
+Deep-Learning-Project2/
 ├── codes/
-│   ├── part1_cifar10/              # Part 1: 自定义CNN网络
-│   │   ├── model.py                # 网络定义
-│   │   ├── train.py                # 训练脚本
-│   │   └── test.py                 # 测试脚本（加载checkpoint评估）
-│   ├── VGG_BatchNorm/              # Part 2: Batch Normalization 实验
-│   │   ├── models/vgg.py           # VGG-A 及 VGG_BatchNorm 实现
-│   │   ├── VGG_Loss_Landscape.py   # Loss Landscape 可视化
-│   │   ├── data/loaders.py         # 数据加载
-│   │   └── utils/nn.py             # 工具函数
-│   └── download.py                 # 一键下载数据集和模型权重
-├── data/                           # 数据集（git ignored，通过download.py获取）
-├── checkpoints/                    # 模型权重（git ignored，通过download.py获取）
-├── report/                         # 实验报告
-└── README.md
+│   ├── part1_cifar10/
+│   │   ├── model.py                    # CifarResNet definition
+│   │   ├── train.py                    # Part 1 training and single-group ablations
+│   │   ├── run_ablations.py            # Part 1 batched ablation runner
+│   │   ├── summarize_experiments.py    # JSON-to-Markdown ablation summaries
+│   │   ├── test.py                     # Evaluate checkpoints/part1_best.pth
+│   │   └── visualize_*.py              # Prediction/filter visualizations
+│   ├── VGG_BatchNorm/
+│   │   ├── models/vgg.py               # VGG-A and VGG-A+BN
+│   │   ├── train_vgg.py                # VGG comparison and LR sweep training
+│   │   ├── run_part2_experiments.py    # Part 2 batched runner
+│   │   ├── VGG_Loss_Landscape.py       # Loss landscape experiment
+│   │   └── cifar_loaders.py            # CIFAR-10 loaders
+│   └── download.py                     # Download data and released checkpoints
+├── data/                               # Ignored by git; downloaded from ModelScope/torchvision
+├── checkpoints/                        # Ignored by git; downloaded or produced locally
+├── outputs/                            # Ignored by git; experiment summaries and console logs
+├── pic/                                # Figures used by the report
+└── report/                             # LaTeX report and compiled PDF
 ```
 
-## 快速复现
+## Environment
+
+The project intentionally uses a small dependency set:
 
 ```bash
-# 1. 安装依赖
-pip install torch torchvision modelscope matplotlib
-
-# 2. 下载数据集
-python codes/download.py --data --source torchvision
-
-# 如果已上传预训练权重到 ModelScope，再下载数据集和权重
-MODELSCOPE_REPO_ID=your_name/NNDL-PJ2 python codes/download.py --all
-
-# 3. Part 1 - 测试最佳模型
-python codes/part1_cifar10/test.py
-
-# 4. Part 2 - 运行BN实验
-python codes/VGG_BatchNorm/VGG_Loss_Landscape.py
+conda activate sii
+pip install -r requirements.txt
 ```
 
-## Part 1: Train a Network on CIFAR-10 (60%)
+Core dependencies are PyTorch, torchvision, matplotlib, numpy, and modelscope. Training scripts enable AMP by default on CUDA; add `--no-amp` for full FP32 runs.
 
-目标：设计并训练CNN，在CIFAR-10上达到尽可能低的test error。
+## Fast Reproduction for Review
 
-**网络组件：**
-- 必须包含：FC层、Conv2d、Pooling2d、Activation
-- 可选组件：BatchNorm、Dropout、Residual Connection
+The fastest path downloads the CIFAR-10 archive and released checkpoints from ModelScope, then evaluates the Part 1 model:
 
-**优化策略：**
-- 不同 filter 数量 / 网络宽度
-- 不同 loss function（CrossEntropy + label smoothing 等）
-- 不同 activation（ReLU、GELU、SiLU 等）
-- 不同 optimizer（SGD+momentum、Adam、AdamW）
-- 学习率调度（CosineAnnealing）
-- 数据增强（RandomCrop、HorizontalFlip、Cutout 等）
+```bash
+git clone https://github.com/Parry-Git/Deep-Learning-Project2.git
+cd Deep-Learning-Project2
 
-## Part 2: Batch Normalization (30%)
+conda activate sii
+pip install -r requirements.txt
+python codes/download.py --all
+python codes/part1_cifar10/test.py
+```
 
-目标：在VGG-A上对比BN的效果，并通过Loss Landscape分析BN为何有效。
+Expected released Part 1 checkpoint:
 
-**2.2 VGG-A with/without BN (15%)**
-- 训练 VGG-A baseline 和 VGG-A + BN
-- 对比训练曲线（loss、accuracy）
+- `checkpoints/part1_best.pth`
+- Best test accuracy recorded during training: 96.59%
+- Final test accuracy in the logged 200-epoch run: 96.52%
 
-**2.3 Loss Landscape 分析 (15%)**
-- 多个学习率分别训练，记录每步loss
-- 绘制 loss landscape（fill_between 上下界）
-- VGG-A vs VGG-A+BN 同图对比
+If ModelScope is unavailable, CIFAR-10 can still be downloaded from the official torchvision mirror:
 
-## 数据与模型存储
+```bash
+python codes/download.py --data --source torchvision
+```
 
-数据集和模型权重存储在 ModelScope：
-- 仓库地址：`TODO`（提交前填写）
-- 提交前上传后，可使用 `MODELSCOPE_REPO_ID=your_name/NNDL-PJ2 python codes/download.py --all` 一键获取
-- 未配置 ModelScope 仓库时，可先用 `python codes/download.py --data --source torchvision` 获取 CIFAR-10 数据集
+Checkpoint download requires the ModelScope repository above.
 
-## 环境
+## Reproducing the Full Experiments
 
-- Python 3.9+
-- PyTorch 2.x
-- torchvision
-- matplotlib
-- modelscope
+These commands reproduce the experiments used in the report. They may take several hours on a single GPU.
+
+### Part 1 Main Run
+
+```bash
+python codes/part1_cifar10/train.py \
+  --epochs 200 \
+  --run-name main_sgd \
+  --workers 2 \
+  --persistent-workers \
+  --mp-context forkserver
+```
+
+The command saves:
+
+- `checkpoints/part1_best.pth`
+- `checkpoints/train_log_main_sgd.json`
+- `checkpoints/training_curves_main_sgd.png`
+
+### Part 1 Ablation Study
+
+The full ablation batch covers width/filter counts, activation functions, optimizers, losses, and regularization:
+
+```bash
+python codes/part1_cifar10/run_ablations.py --epochs 100 --workers 2
+```
+
+Outputs include:
+
+- `checkpoints/experiment_summary_ablation_*_e100.json`
+- `outputs/part1_ablations/summary_ablation_all_e100.md`
+- `checkpoints/training_curves_ablation_*.png`
+
+Single-group examples:
+
+```bash
+python codes/part1_cifar10/train.py --experiment width --epochs 100 --run-name ablation_width_e100 --workers 2 --persistent-workers --mp-context forkserver --no-compile
+python codes/part1_cifar10/train.py --experiment activations --epochs 100 --run-name ablation_activations_e100 --workers 2 --persistent-workers --mp-context forkserver --no-compile
+python codes/part1_cifar10/train.py --experiment optimizers --epochs 100 --run-name ablation_optimizers_e100 --workers 2 --persistent-workers --mp-context forkserver --no-compile
+python codes/part1_cifar10/train.py --experiment losses --epochs 100 --run-name ablation_losses_e100 --workers 2 --persistent-workers --mp-context forkserver --no-compile
+python codes/part1_cifar10/train.py --experiment regularization --epochs 100 --run-name ablation_regularization_e100 --workers 2 --persistent-workers --mp-context forkserver --no-compile
+```
+
+### Part 1 Visualizations
+
+```bash
+python codes/part1_cifar10/visualize_predictions.py \
+  --checkpoint checkpoints/part1_best.pth \
+  --output pic/predictions.png \
+  --seed 2026
+
+python codes/part1_cifar10/visualize_filters.py \
+  --checkpoint checkpoints/part1_best.pth \
+  --output pic/part1_conv1_filters.png
+```
+
+### Part 2 Batch Normalization Experiments
+
+```bash
+python codes/VGG_BatchNorm/run_part2_experiments.py --workers 2
+```
+
+This runs:
+
+- VGG-A vs VGG-A+BN 100-epoch comparison.
+- Learning-rate sweep over `1e-4`, `5e-4`, `1e-3`, and `2e-3`.
+- Loss landscape experiment across the same learning rates.
+
+Key outputs:
+
+- `checkpoints/vgg_bn/best_vgg_compare_e100_vgg_a.pth`
+- `checkpoints/vgg_bn/best_vgg_compare_e100_vgg_bn.pth`
+- `checkpoints/vgg_bn/best_vgg_lr_*_e40_*.pth`
+- `checkpoints/vgg_bn/loss_landscape_vgg_loss_landscape.json`
+- `outputs/part2_bn/part2_summary.md`
+- `pic/vgg_train_vgg_compare_e100.png`
+- `pic/loss_landscape_vgg_loss_landscape.png`
+
+Single-command equivalents:
+
+```bash
+python codes/VGG_BatchNorm/train_vgg.py \
+  --model both \
+  --epochs 100 \
+  --run-name vgg_compare_e100 \
+  --workers 2 \
+  --persistent-workers \
+  --worker-timeout 120 \
+  --mp-context forkserver
+
+python codes/VGG_BatchNorm/VGG_Loss_Landscape.py \
+  --epochs 5 \
+  --n-items 5000 \
+  --run-name vgg_loss_landscape \
+  --workers 2 \
+  --persistent-workers \
+  --worker-timeout 120 \
+  --mp-context forkserver
+```
+
+## Reported Results
+
+Part 1 CifarResNet:
+
+| Experiment | Best Accuracy | Notes |
+|---|---:|---|
+| Released medium-width checkpoint, 200 epochs | 96.59% | `checkpoints/part1_best.pth` |
+| Large-width ablation, 100 epochs | 96.85% | Higher capacity, not the released checkpoint |
+
+Part 2 VGG-A / BatchNorm:
+
+| Model | Best Accuracy | Final Accuracy |
+|---|---:|---:|
+| VGG-A, 100 epochs | 87.61% | 86.58% |
+| VGG-A+BN, 100 epochs | 90.52% | 90.30% |
+
+VGG-A is expected to be less accurate than the Part 1 CifarResNet: Part 2 is a controlled BatchNorm study, while Part 1 uses a residual architecture and stronger CIFAR-10 training recipe.
+
+## ModelScope Artifacts
+
+The ModelScope repository stores the dataset, released checkpoints, learning-rate sweep checkpoints, logs, summaries, and report draft:
+
+- `data/cifar-10-python.tar.gz`
+- `checkpoints/part1_best.pth`
+- `checkpoints/vgg_bn/best_vgg_compare_e100_vgg_a.pth`
+- `checkpoints/vgg_bn/best_vgg_compare_e100_vgg_bn.pth`
+- `checkpoints/vgg_bn/best_vgg_lr_*_e40_*.pth`
+- `logs/checkpoints/`
+- `logs/outputs/`
+- `report/main.pdf`
+
+The default repository ID in `codes/download.py` is already set to `ParryY/Deep-Learning-Project2`.
+
+## Report
+
+The final report source is in `report/main.tex`. A compiled PDF is available at:
+
+```text
+report/main.pdf
+```
+
+The report contains the required name/student ID, GitHub link, ModelScope dataset and model link, Part 1 ablation results, Part 2 BN comparison, and loss landscape analysis.

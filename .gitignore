@@ -22,12 +22,16 @@ env/
 *.onnx
 
 # Datasets (stored on ModelScope, download via codes/download.py)
-data/
-!data/.gitkeep
+/data/
+!/data/.gitkeep
+
+# Legacy duplicate VGG loader directory; current scripts use
+# codes/VGG_BatchNorm/cifar_loaders.py.
+/codes/VGG_BatchNorm/data/
 
 # Model checkpoints (stored on ModelScope)
-checkpoints/
-!checkpoints/.gitkeep
+/checkpoints/
+!/checkpoints/.gitkeep
 
 # Jupyter
 .ipynb_checkpoints/

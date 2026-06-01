@@ -22,7 +22,7 @@ import urllib.request
 from pathlib import Path
 
 # ============ 配置区（提交前确认） ============
-DEFAULT_MODELSCOPE_REPO_ID = "YOUR_ID/NNDL-PJ2"  # TODO: 替换为你的 ModelScope 仓库 ID
+DEFAULT_MODELSCOPE_REPO_ID = "ParryY/Deep-Learning-Project2"
 MODELSCOPE_REPO_ID = os.getenv("MODELSCOPE_REPO_ID", DEFAULT_MODELSCOPE_REPO_ID)
 
 FILES = {
@@ -31,8 +31,12 @@ FILES = {
     },
     "checkpoints": {
         "checkpoints/part1_best.pth": "checkpoints/part1_best.pth",
-        "checkpoints/part2_vgg_a.pth": "checkpoints/part2_vgg_a.pth",
-        "checkpoints/part2_vgg_bn.pth": "checkpoints/part2_vgg_bn.pth",
+        "checkpoints/vgg_bn/best_vgg_compare_e100_vgg_a.pth": (
+            "checkpoints/vgg_bn/best_vgg_compare_e100_vgg_a.pth"
+        ),
+        "checkpoints/vgg_bn/best_vgg_compare_e100_vgg_bn.pth": (
+            "checkpoints/vgg_bn/best_vgg_compare_e100_vgg_bn.pth"
+        ),
     },
 }
 # =============================================
@@ -42,14 +46,14 @@ CIFAR10_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
 
 
 def is_placeholder_repo(repo_id: str) -> bool:
-    return not repo_id or repo_id == DEFAULT_MODELSCOPE_REPO_ID or "YOUR_ID" in repo_id
+    return not repo_id or repo_id.lower() in {"none", "placeholder"}
 
 
 def print_modelscope_hint(repo_id: str):
     print("  ModelScope repo is not configured.")
     print(f"  Current repo id: {repo_id!r}")
     print("  Set MODELSCOPE_REPO_ID or pass --repo-id after uploading the files.")
-    print("  Example: MODELSCOPE_REPO_ID=your_name/NNDL-PJ2 python codes/download.py --all")
+    print("  Example: MODELSCOPE_REPO_ID=ParryY/Deep-Learning-Project2 python codes/download.py --all")
 
 
 def download_from_modelscope(repo_id: str, filename: str, local_path: Path):
@@ -121,7 +125,7 @@ def main():
     parser.add_argument(
         "--repo-id",
         default=MODELSCOPE_REPO_ID,
-        help="ModelScope repo id, e.g. your_name/NNDL-PJ2. Can also use MODELSCOPE_REPO_ID.",
+        help="ModelScope repo id, e.g. ParryY/Deep-Learning-Project2. Can also use MODELSCOPE_REPO_ID.",
     )
     args = parser.parse_args()
     repo_id = args.repo_id

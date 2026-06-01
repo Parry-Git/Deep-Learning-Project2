@@ -4,7 +4,7 @@ CIFAR-10 training script.
 Usage:
     python train.py                          # default config
     python train.py --epochs 200 --lr 0.1    # custom hyperparams
-    python train.py --amp                    # mixed precision (CUDA/MPS)
+    python train.py --no-amp                 # disable mixed precision
     python train.py --experiment all         # run ablation experiments
 
 Features:
@@ -18,6 +18,7 @@ Features:
 """
 
 import argparse
+import copy
 import json
 import os
 import ssl
@@ -25,8 +26,15 @@ import sys
 import time
 from pathlib import Path
 
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+
+import matplotlib as mpl
+
+mpl.use("Agg")
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
@@ -230,6 +238,82 @@ def evaluate(model, loader, criterion, device, use_amp=False):
     return total_loss / total, 100.0 * correct / total
 
 
+class FocalLoss(nn.Module):
+    """Multi-class focal loss for CIFAR-10 ablation experiments."""
+
+    def __init__(self, gamma=2.0, label_smoothing=0.0):
+        super().__init__()
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+
+    def forward(self, logits, targets):
+        ce = F.cross_entropy(
+            logits,
+            targets,
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )
+        pt = torch.exp(-ce)
+        return ((1.0 - pt) ** self.gamma * ce).mean()
+
+
+def build_criterion(args):
+    if args.loss == "ce":
+        return nn.CrossEntropyLoss()
+    if args.loss == "label_smoothing":
+        return nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    if args.loss == "focal":
+        return FocalLoss(gamma=args.focal_gamma, label_smoothing=args.label_smoothing)
+    raise ValueError(f"Unknown loss: {args.loss}")
+
+
+def save_history(history, log_path):
+    with open(log_path, "w") as f:
+        json.dump(history, f, indent=2)
+
+
+def plot_history(history, plot_path):
+    epochs = range(1, len(history["train_loss"]) + 1)
+    if not history["train_loss"]:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    axes[0].plot(epochs, history["train_loss"], label="Train Loss", linewidth=2)
+    axes[0].plot(epochs, history["test_loss"], label="Test Loss", linewidth=2)
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Loss")
+    axes[0].set_title("Loss Curves")
+    axes[0].grid(alpha=0.3)
+    axes[0].legend()
+
+    axes[1].plot(epochs, history["train_acc"], label="Train Acc", linewidth=2)
+    axes[1].plot(epochs, history["test_acc"], label="Test Acc", linewidth=2)
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Accuracy (%)")
+    axes[1].set_title("Accuracy Curves")
+    axes[1].grid(alpha=0.3)
+    axes[1].legend()
+
+    best_epoch = history.get("best_epoch")
+    best_acc = history.get("best_acc")
+    if best_epoch and best_acc is not None:
+        axes[1].scatter([best_epoch], [best_acc], color="#b91c1c", zorder=3)
+        axes[1].annotate(
+            f"best {best_acc:.2f}%",
+            xy=(best_epoch, best_acc),
+            xytext=(8, -12),
+            textcoords="offset points",
+            fontsize=9,
+            color="#b91c1c",
+        )
+
+    fig.tight_layout()
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(plot_path, dpi=180)
+    plt.close(fig)
+
+
 def get_optimizer(name, params, lr, weight_decay, momentum=0.9):
     if name == "sgd":
         return optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
@@ -281,7 +365,7 @@ def train(args):
     if use_amp:
         print(f"AMP: enabled (dtype=float16, scaler={'yes' if scaler else 'no'})")
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    criterion = build_criterion(args)
     optimizer = get_optimizer(args.optimizer, model.parameters(), args.lr, args.weight_decay)
 
     # Cosine annealing with warmup
@@ -300,9 +384,37 @@ def train(args):
     save_dir = PROJECT_ROOT / "checkpoints"
     save_dir.mkdir(parents=True, exist_ok=True)
     log_path = save_dir / f"train_log_{args.run_name}.json"
+    plot_path = save_dir / f"training_curves_{args.run_name}.png"
+    best_path = None if args.no_save_checkpoint else save_dir / args.checkpoint_name
 
     best_acc = 0.0
-    history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": [], "lr": []}
+    history = {
+        "train_loss": [],
+        "train_acc": [],
+        "test_loss": [],
+        "test_acc": [],
+        "lr": [],
+        "best_acc": best_acc,
+        "best_epoch": None,
+        "artifacts": {
+            "log": str(log_path),
+            "plot": str(plot_path),
+            "checkpoint": str(best_path) if best_path else None,
+        },
+        "config": {
+            **model_config,
+            "loss": args.loss,
+            "optimizer": args.optimizer,
+            "lr": args.lr,
+            "batch_size": args.batch_size,
+            "epochs": args.epochs,
+            "label_smoothing": args.label_smoothing,
+            "focal_gamma": args.focal_gamma,
+            "weight_decay": args.weight_decay,
+            "workers": args.workers,
+            "amp": args.amp,
+        },
+    }
 
     print(f"\n{'Epoch':>5} {'LR':>8} {'Train Loss':>10} {'Train Acc':>9} {'Test Loss':>9} {'Test Acc':>8} {'Time':>6}")
     print("-" * 65)
@@ -324,25 +436,29 @@ def train(args):
         is_best = test_acc > best_acc
         if is_best:
             best_acc = test_acc
-            state = unwrap_model(model).state_dict()
-            torch.save(state, save_dir / "part1_best.pth")
+            history["best_acc"] = best_acc
+            history["best_epoch"] = epoch
+            if best_path is not None:
+                state = unwrap_model(model).state_dict()
+                torch.save(state, best_path)
 
         marker = " *" if is_best else ""
         print(f"{epoch:>5} {lr:>8.6f} {train_loss:>10.4f} {train_acc:>8.2f}% {test_loss:>9.4f} {test_acc:>7.2f}%{marker} {elapsed:>5.1f}s")
+        save_history(history, log_path)
 
     print(f"\nBest test accuracy: {best_acc:.2f}%")
-    print(f"Model saved to: {save_dir / 'part1_best.pth'}")
+    if best_path is not None:
+        print(f"Model saved to: {best_path}")
+    else:
+        print("Model checkpoint saving disabled for this run.")
 
-    # Save training log
-    history["config"] = {**model_config, "optimizer": args.optimizer, "lr": args.lr,
-                         "batch_size": args.batch_size, "epochs": args.epochs,
-                         "label_smoothing": args.label_smoothing, "weight_decay": args.weight_decay}
-    history["best_acc"] = best_acc
-    with open(log_path, "w") as f:
-        json.dump(history, f, indent=2)
+    # Save training log and curves
+    save_history(history, log_path)
+    plot_history(history, plot_path)
     print(f"Log saved to: {log_path}")
+    print(f"Curves saved to: {plot_path}")
 
-    return best_acc
+    return history
 
 
 def main():
@@ -351,8 +467,10 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--optimizer", choices=["sgd", "adam", "adamw"], default="sgd")
+    parser.add_argument("--loss", choices=["ce", "label_smoothing", "focal"], default="label_smoothing")
     parser.add_argument("--weight-decay", type=float, default=5e-4)
     parser.add_argument("--label-smoothing", type=float, default=0.1)
+    parser.add_argument("--focal-gamma", type=float, default=2.0)
     parser.add_argument("--activation", choices=["relu", "gelu", "silu"], default="relu")
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--blocks", type=int, nargs=3, default=[3, 3, 3])
@@ -370,10 +488,16 @@ def main():
                         help="Disable DataLoader pin_memory")
     parser.add_argument("--no-compile", action="store_true",
                         help="Disable torch.compile")
-    parser.add_argument("--amp", action="store_true", help="Enable mixed precision (CUDA/MPS)")
+    parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True,
+                        help="Enable mixed precision when supported; use --no-amp to disable")
     parser.add_argument("--run-name", type=str, default="default")
+    parser.add_argument("--checkpoint-name", type=str, default="part1_best.pth")
+    parser.add_argument("--no-save-checkpoint", action="store_true",
+                        help="Disable checkpoint saving; useful for large ablation sweeps")
+    parser.add_argument("--save-ablation-checkpoints", action="store_true",
+                        help="Save a separate best checkpoint for each ablation run")
     parser.add_argument("--experiment", type=str, default=None,
-                        help="Run ablation: activations | optimizers | width | all")
+                        help="Run ablation: baseline | activations | optimizers | width | losses | regularization | all")
     args = parser.parse_args()
 
     if args.experiment:
@@ -385,8 +509,13 @@ def main():
 def run_experiments(args):
     """Run ablation experiments to compare different configurations."""
     results = {}
+    base_run_name = args.run_name
 
     experiments = {}
+    if args.experiment in ("baseline", "all"):
+        experiments["baseline"] = [
+            {"run_name": "baseline"},
+        ]
     if args.experiment in ("activations", "all"):
         experiments["activations"] = [
             {"activation": "relu", "run_name": "act_relu"},
@@ -405,6 +534,23 @@ def run_experiments(args):
             {"channels": [64, 128, 256], "run_name": "width_medium"},
             {"channels": [128, 256, 512], "run_name": "width_large"},
         ]
+    if args.experiment in ("losses", "all"):
+        experiments["losses"] = [
+            {"loss": "ce", "label_smoothing": 0.0, "run_name": "loss_ce"},
+            {"loss": "label_smoothing", "label_smoothing": 0.05, "run_name": "loss_ls005"},
+            {"loss": "label_smoothing", "label_smoothing": 0.1, "run_name": "loss_ls010"},
+            {"loss": "focal", "label_smoothing": 0.0, "focal_gamma": 2.0, "run_name": "loss_focal"},
+        ]
+    if args.experiment in ("regularization", "all"):
+        experiments["regularization"] = [
+            {"dropout": 0.0, "weight_decay": 5e-4, "run_name": "reg_dropout000"},
+            {"dropout": 0.1, "weight_decay": 5e-4, "run_name": "reg_dropout010"},
+            {"dropout": 0.2, "weight_decay": 5e-4, "run_name": "reg_dropout020"},
+            {"dropout": 0.1, "weight_decay": 1e-4, "run_name": "reg_wd0001"},
+        ]
+
+    if not experiments:
+        raise ValueError(f"Unknown experiment group: {args.experiment}")
 
     for group_name, configs in experiments.items():
         print(f"\n{'='*60}")
@@ -412,23 +558,39 @@ def run_experiments(args):
         print(f"{'='*60}")
         results[group_name] = {}
         for cfg in configs:
-            run_name = cfg.pop("run_name")
+            run_name = f"{base_run_name}_{cfg['run_name']}"
+            run_args = argparse.Namespace(**copy.deepcopy(vars(args)))
+            run_args.experiment = None
+            run_args.run_name = run_name
+            run_args.no_save_checkpoint = not args.save_ablation_checkpoints
+            if args.save_ablation_checkpoints:
+                run_args.checkpoint_name = f"part1_best_{run_name}.pth"
             for k, v in cfg.items():
-                setattr(args, k, v)
-            args.run_name = run_name
+                if k != "run_name":
+                    setattr(run_args, k, v)
             print(f"\n--- {run_name} ---")
-            acc = train(args)
-            results[group_name][run_name] = acc
+            history = train(run_args)
+            results[group_name][run_name] = {
+                "best_acc": history["best_acc"],
+                "best_epoch": history["best_epoch"],
+                "final_acc": history["test_acc"][-1],
+                "final_loss": history["test_loss"][-1],
+                "config": history["config"],
+                "artifacts": history["artifacts"],
+            }
 
     print(f"\n{'='*60}")
     print("  Experiment Summary")
     print(f"{'='*60}")
     for group, runs in results.items():
         print(f"\n[{group}]")
-        for name, acc in runs.items():
-            print(f"  {name}: {acc:.2f}%")
+        for name, payload in runs.items():
+            print(
+                f"  {name}: best={payload['best_acc']:.2f}% "
+                f"@epoch {payload['best_epoch']} | final={payload['final_acc']:.2f}%"
+            )
 
-    summary_path = PROJECT_ROOT / "checkpoints" / "experiment_summary.json"
+    summary_path = PROJECT_ROOT / "checkpoints" / f"experiment_summary_{base_run_name}.json"
     with open(summary_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nSummary saved to: {summary_path}")
